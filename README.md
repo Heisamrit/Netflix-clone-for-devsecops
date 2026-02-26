@@ -180,48 +180,111 @@ Create a Jenkins webhook
 - Create a CI/CD pipeline in Jenkins to automate your application deployment.
 
 ```groovy
-pipeline {
+pipeline{
     agent any
-    tools {
+    tools{
         jdk 'jdk17'
         nodejs 'node16'
     }
     environment {
-        SCANNER_HOME = tool 'sonar-scanner'
+        SCANNER_HOME=tool 'sonar-scanner'
     }
     stages {
-        stage('clean workspace') {
-            steps {
+        stage('clean workspace'){
+            steps{
                 cleanWs()
             }
         }
-        stage('Checkout from Git') {
-            steps {
-                git branch: 'main', url: 'https://github.com/N4si/DevSecOps-Project.git'
+        stage('Checkout from Git'){
+            steps{
+                git branch: 'main', url: 'https://github.com/Heisamrit/Netflix-clone-for-devsecops.git'
             }
         }
-        stage("Sonarqube Analysis") {
-            steps {
+        stage("Sonarqube Analysis "){
+            steps{
                 withSonarQubeEnv('sonar-server') {
-                    sh '''$SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Netflix \
-                    -Dsonar.projectKey=Netflix'''
+                    sh ''' $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=Netflix \
+                    -Dsonar.projectKey=Netflix '''
                 }
             }
         }
-        stage("quality gate") {
-            steps {
+        stage("quality gate"){
+           steps {
                 script {
-                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token'
+                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token' 
                 }
-            }
+            } 
         }
         stage('Install Dependencies') {
             steps {
                 sh "npm install"
             }
         }
+        stage('OWASP FS SCAN') {
+            steps {
+                dependencyCheck additionalArguments: '--scan ./ --disableYarnAudit --disableNodeAudit', odcInstallation: 'DP-Check'
+                dependencyCheckPublisher pattern: '**/dependency-check-report.xml'
+            }
+        }
+        stage('TRIVY FS SCAN') {
+            steps {
+                sh "trivy fs . > trivyfs.txt"
+            }
+        }
+        stage("Docker Build & Push"){
+            steps{
+                script{
+                   withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){   
+                       sh "docker build --build-arg TMDB_V3_API_KEY=1c3512eed6b426826244322949626f1a -t netflix ."
+                       sh "docker tag netflix heisamrit/netflix:latest "
+                       sh "docker push heisamrit/netflix:latest "
+                    }
+                }
+            }
+        }
+        stage("TRIVY"){
+            steps{
+                sh "trivy image heisamrit/netflix:latest > trivyimage.txt" 
+            }
+        }
+        stage('Deploy to container'){
+            steps{
+            sh '''
+            docker ps -q --filter "publish=8081" | xargs -r docker rm -f
+            docker rm -f netflix || true
+            docker pull heisamrit/netflix:latest
+            docker run -d --name netflix --restart=always -p 8081:80 heisamrit/netflix:latest
+            '''
+            }
+        }
+        stage('Deploy to kubernets'){
+            steps{
+                script{
+                    dir('Kubernetes') {
+                        withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'k8s', namespace: '', restrictKubeConfigAccess: false, serverUrl: '') {
+                                sh 'kubectl apply -f deployment.yml'
+                                sh 'kubectl apply -f service.yml'
+                        }   
+                    }
+                }
+            }
+        }
+
+    }
+    post {
+     always {
+        emailext attachLog: true,
+            subject: "'${currentBuild.result}'",
+            body: "Project: ${env.JOB_NAME}<br/>" +
+                "Build Number: ${env.BUILD_NUMBER}<br/>" +
+                "URL: ${env.BUILD_URL}<br/>",
+            to: 'heisamrit@gmail.com',                                
+            attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+        }
     }
 }
+
+
 ```
 
 Certainly, here are the instructions without step numbers:
@@ -287,7 +350,7 @@ pipeline{
         }
         stage('Checkout from Git'){
             steps{
-                git branch: 'main', url: 'https://github.com/N4si/DevSecOps-Project.git'
+                git branch: 'main', url: 'https://github.com/Heisamrit/Netflix-clone-for-devsecops.git'
             }
         }
         stage("Sonarqube Analysis "){
@@ -325,25 +388,56 @@ pipeline{
             steps{
                 script{
                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker'){   
-                       sh "docker build --build-arg TMDB_V3_API_KEY=<yourapikey> -t netflix ."
-                       sh "docker tag netflix nasi101/netflix:latest "
-                       sh "docker push nasi101/netflix:latest "
+                       sh "docker build --build-arg TMDB_V3_API_KEY=1c3512eed6b426826244322949626f1a -t netflix ."
+                       sh "docker tag netflix heisamrit/netflix:latest "
+                       sh "docker push heisamrit/netflix:latest "
                     }
                 }
             }
         }
         stage("TRIVY"){
             steps{
-                sh "trivy image nasi101/netflix:latest > trivyimage.txt" 
+                sh "trivy image heisamrit/netflix:latest > trivyimage.txt" 
             }
         }
         stage('Deploy to container'){
             steps{
-                sh 'docker run -d --name netflix -p 8081:80 nasi101/netflix:latest'
+            sh '''
+            docker ps -q --filter "publish=8081" | xargs -r docker rm -f
+            docker rm -f netflix || true
+            docker pull heisamrit/netflix:latest
+            docker run -d --name netflix --restart=always -p 8081:80 heisamrit/netflix:latest
+            '''
             }
+        }
+        stage('Deploy to kubernets'){
+            steps{
+                script{
+                    dir('Kubernetes') {
+                        withKubeConfig(caCertificate: '', clusterName: '', contextName: '', credentialsId: 'k8s', namespace: '', restrictKubeConfigAccess: false, serverUrl: '') {
+                                sh 'kubectl apply -f deployment.yml'
+                                sh 'kubectl apply -f service.yml'
+                        }   
+                    }
+                }
+            }
+        }
+
+    }
+    post {
+     always {
+        emailext attachLog: true,
+            subject: "'${currentBuild.result}'",
+            body: "Project: ${env.JOB_NAME}<br/>" +
+                "Build Number: ${env.BUILD_NUMBER}<br/>" +
+                "URL: ${env.BUILD_URL}<br/>",
+            to: 'heisamrit@gmail.com',                                
+            attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
         }
     }
 }
+
+
 
 
 If you get docker login failed errorr
